@@ -1,0 +1,79 @@
+#!/bin/sh
+#
+# usage: jlchecksum <filename>
+#
+
+if [ -z "$1" ]; then
+    echo "Usage: ./jlchecksum <filename>" >&2
+    exit 1
+fi
+
+BASENAME=$(basename $1)
+
+# Print out a hash, and wrap around if we're longer than 64 characters
+print_hash()
+{
+    if [ ${#1} -gt 64 ]; then
+        NUM_LINES=$(( (${#1} + 63) / 64))
+        for (( i=0; i<$NUM_LINES; i++ )); do
+            echo "    ${1:$((i*64)):64}"
+        done
+    else
+        echo "    $1" >&2
+    fi
+}
+
+checksum_error()
+{
+    echo "===============================================================================" >&2
+    echo "ERROR: $CHECKSUM_TYPE checksum failure on $BASENAME, should be:" >&2
+    print_hash "$TRUE_CHECKSUM"
+    echo "But calculating with \`$CHECKSUM_PROG\` is actually:" >&2
+    print_hash "$CURR_CHECKSUM"
+    echo "===============================================================================" >&2
+    exit 2
+}
+
+find_checksum()
+{
+    # If we're looking for the SHA512 checksum, it's the 2nd line after filename
+    if [ "$CHECKSUM_TYPE" == "SHA512" ]; then
+        LINE=3
+    else
+        LINE=2
+    fi
+
+    # The `head -$LINE | tail -1` isolates the hash line we want, and the xargs
+    # strips away any leading or trailing whitespace. We also ignore comments.
+    TRUE_CHECKSUM=$(grep -v '^#' checksums | grep $BASENAME -A2 | head -$LINE | tail -1 | xargs)
+    if [ -z "$TRUE_CHECKSUM" ]; then
+        echo "WARNING: Checksum for $BASENAME not found in deps/checksums" >&2
+        exit 0
+    fi
+}
+
+# If we have md5sum or shasum available, use those to check downloaded file!
+if [ ! -z $(which shasum) ]; then
+    # Set all our algorithms to use SHA512
+    CHECKSUM_TYPE="SHA512"
+    CHECKSUM_PROG="shasum -a 512 $BASENAME | awk '{ print \$1; }'"
+elif [ ! -z $(which md5sum) ] || [ ! -z $(which md5) ]; then
+    CHECKSUM_TYPE="MD5"
+
+    if [ ! -z $(which md5sum) ]; then
+        CHECKSUM_PROG="md5sum $BASENAME | awk '{ print \$1; }'"
+    else
+        CHECKSUM_PROG="md5 -q $BASENAME"
+    fi
+fi
+
+# Find true checksum
+find_checksum "$CHECKSUM_TYPE"
+
+# Calculate actual checksum
+CURR_CHECKSUM=$(eval $CHECKSUM_PROG)
+
+# Make sure they're the same.  If not, error out!
+if [ "$TRUE_CHECKSUM" != "$CURR_CHECKSUM" ]; then
+    checksum_error
+fi
